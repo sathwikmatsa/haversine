@@ -6,14 +6,14 @@ use std::{
 
 use clap::{Parser, ValueEnum};
 use haversine::{
-    reference_haversine, HaversineDataPoint, EARTH_RADIUS, X_HIGH, X_LOW, Y_HIGH, Y_LOW,
+    reference_haversine, HaversineData, HaversineDataPoint, EARTH_RADIUS, X_HIGH, X_LOW, Y_HIGH,
+    Y_LOW,
 };
 use rand::{
     distributions::{Distribution, Uniform},
     Rng, SeedableRng,
 };
 use rand_chacha::ChaCha8Rng;
-use serde::Serialize;
 
 #[derive(Clone, Copy, ValueEnum)]
 enum HaversineDist {
@@ -38,11 +38,6 @@ struct Arguments {
     seed: u64,
     #[arg(name = "number of coordinate pairs to generate")]
     pair_count: usize,
-}
-
-#[derive(Serialize)]
-struct HaversineData {
-    pairs: Vec<HaversineDataPoint>,
 }
 
 fn generate_haversine_data_uniform(n: usize, seed: u64) -> HaversineData {
@@ -133,8 +128,14 @@ fn save_haversine_answer_to_file(data: &HaversineData) -> f64 {
             .write_all(&dist.to_le_bytes())
             .expect("Failed to write to file");
     }
+
+    let avg = sum / pair_count as f64;
+    writer
+        .write_all(&avg.to_le_bytes())
+        .expect("Failed to write to file");
+
     writer.flush().expect("Failed to flush buffer");
-    sum / pair_count as f64
+    avg
 }
 
 fn main() {
