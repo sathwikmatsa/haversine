@@ -5,10 +5,12 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use haversine::{reference_haversine, HaversineDataPoint, EARTH_RADIUS};
+use haversine::{
+    reference_haversine, HaversineDataPoint, EARTH_RADIUS, X_HIGH, X_LOW, Y_HIGH, Y_LOW,
+};
 use rand::{
     distributions::{Distribution, Uniform},
-    SeedableRng,
+    Rng, SeedableRng,
 };
 use rand_chacha::ChaCha8Rng;
 use serde::Serialize;
@@ -46,8 +48,8 @@ struct HaversineData {
 fn generate_haversine_data_uniform(n: usize, seed: u64) -> HaversineData {
     let mut pairs: Vec<HaversineDataPoint> = Vec::with_capacity(n);
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    let uniform_x = Uniform::new_inclusive(-180f64, 180f64);
-    let uniform_y = Uniform::new_inclusive(-90f64, 90f64);
+    let uniform_x = Uniform::new_inclusive(X_LOW, X_HIGH);
+    let uniform_y = Uniform::new_inclusive(Y_LOW, Y_HIGH);
     for _ in 0..n {
         pairs.push(HaversineDataPoint {
             x0: uniform_x.sample(&mut rng),
@@ -59,10 +61,56 @@ fn generate_haversine_data_uniform(n: usize, seed: u64) -> HaversineData {
     HaversineData { pairs }
 }
 
+fn distribution_clusters(
+    start: f64,
+    end: f64,
+    parts: usize,
+    rng: &mut impl Rng,
+) -> Vec<Uniform<f64>> {
+    let mut breakpoints: Vec<f64> = (0..parts - 1).map(|_| rng.gen_range(start..end)).collect();
+    breakpoints.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    breakpoints.insert(0, start);
+    breakpoints.push(end);
+
+    breakpoints
+        .windows(2)
+        .map(|range| Uniform::new(range[0], range[1]))
+        .collect()
+}
+
+fn generate_haversine_data_cluster(n: usize, seed: u64) -> HaversineData {
+    let mut pairs: Vec<HaversineDataPoint> = Vec::with_capacity(n);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let cluster_size: usize = match n {
+        0..=1000 => 4,
+        1001..=100000 => 8,
+        100001..=1000000 => 16,
+        1000001..=10000000 => 32,
+        _ => 64,
+    };
+    debug_assert!(cluster_size.is_power_of_two());
+    let parts = (cluster_size as f64).sqrt() as usize;
+
+    let x_clusters = distribution_clusters(X_LOW, X_HIGH, parts, &mut rng);
+    let y_clusters = distribution_clusters(Y_LOW, Y_HIGH, parts, &mut rng);
+
+    let step = n.div_ceil(parts);
+
+    for i in 0..n {
+        pairs.push(HaversineDataPoint {
+            x0: x_clusters[i / step].sample(&mut rng),
+            y0: y_clusters[i / step].sample(&mut rng),
+            x1: x_clusters[i / step].sample(&mut rng),
+            y1: y_clusters[i / step].sample(&mut rng),
+        })
+    }
+    HaversineData { pairs }
+}
+
 fn save_to_file(data: &HaversineData) {
     fs::write(
         format!("data_{}_flex.json", data.pairs.len()),
-        serde_json::to_string(data).expect("Unable to serialize"),
+        serde_json::to_string_pretty(data).expect("Unable to serialize"),
     )
     .expect("Unable to write file");
 }
@@ -89,7 +137,7 @@ fn main() {
     let args = Arguments::parse();
     let data = match args.dist {
         HaversineDist::Uniform => generate_haversine_data_uniform(args.pair_count, args.seed),
-        _ => unimplemented!(),
+        HaversineDist::Cluster => generate_haversine_data_cluster(args.pair_count, args.seed),
     };
     save_to_file(&data);
     let avg = save_haversine_answer_to_file(&data);

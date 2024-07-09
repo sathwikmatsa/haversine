@@ -1,6 +1,10 @@
 use serde::Serialize;
 
 pub const EARTH_RADIUS: f64 = 6372.8f64;
+pub const X_LOW: f64 = -180f64;
+pub const X_HIGH: f64 = 180f64;
+pub const Y_LOW: f64 = -90f64;
+pub const Y_HIGH: f64 = 90f64;
 
 #[derive(Serialize)]
 pub struct HaversineDataPoint {
