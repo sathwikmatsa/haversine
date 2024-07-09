@@ -1,6 +1,6 @@
 use core::fmt;
 use std::{
-    fs::{self, File},
+    fs::File,
     io::{BufWriter, Write},
 };
 
@@ -108,11 +108,15 @@ fn generate_haversine_data_cluster(n: usize, seed: u64) -> HaversineData {
 }
 
 fn save_to_file(data: &HaversineData) {
-    fs::write(
-        format!("data_{}_flex.json", data.pairs.len()),
-        serde_json::to_string_pretty(data).expect("Unable to serialize"),
-    )
-    .expect("Unable to write file");
+    let contents = serde_json::to_string(data).expect("Unable to serialize");
+    let file = File::create(format!("data_{}_flex.json", data.pairs.len()))
+        .expect("Unable to create file");
+    let mut writer = BufWriter::new(file);
+    writer
+        .write_all(contents.as_bytes())
+        .expect("Unable to write data");
+
+    writer.flush().expect("Failed to flush buffer");
 }
 
 fn save_haversine_answer_to_file(data: &HaversineData) -> f64 {
