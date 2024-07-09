@@ -20,7 +20,7 @@ pub struct HaversineData {
 }
 
 // Reference: https://github.com/cmuratori/computer_enhance/blob/a6e9cb2a7b57e450ba2e7b75d0fd3e36ffa72d7d/perfaware/part2/listing_0065_haversine_formula.cpp
-pub fn reference_haversine(point: &HaversineDataPoint, radius: f64) -> f64 {
+#[must_use] pub fn reference_haversine(point: &HaversineDataPoint, radius: f64) -> f64 {
     let lat1 = point.y0;
     let lat2 = point.y1;
     let lon1 = point.x0;

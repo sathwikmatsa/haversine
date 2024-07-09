@@ -51,7 +51,7 @@ fn generate_haversine_data_uniform(n: usize, seed: u64) -> HaversineData {
             y0: uniform_y.sample(&mut rng),
             x1: uniform_x.sample(&mut rng),
             y1: uniform_y.sample(&mut rng),
-        })
+        });
     }
     HaversineData { pairs }
 }
@@ -78,12 +78,13 @@ fn generate_haversine_data_cluster(n: usize, seed: u64) -> HaversineData {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
     let cluster_size: usize = match n {
         0..=1000 => 4,
-        1001..=100000 => 8,
-        100001..=1000000 => 16,
-        1000001..=10000000 => 32,
+        1001..=100_000 => 8,
+        100_001..=1_000_000 => 16,
+        1_000_001..=10_000_000 => 32,
         _ => 64,
     };
     debug_assert!(cluster_size.is_power_of_two());
+    #[allow(clippy::pedantic)]
     let parts = (cluster_size as f64).sqrt() as usize;
 
     let x_clusters = distribution_clusters(X_LOW, X_HIGH, parts, &mut rng);
@@ -97,7 +98,7 @@ fn generate_haversine_data_cluster(n: usize, seed: u64) -> HaversineData {
             y0: y_clusters[i / step].sample(&mut rng),
             x1: x_clusters[i / step].sample(&mut rng),
             y1: y_clusters[i / step].sample(&mut rng),
-        })
+        });
     }
     HaversineData { pairs }
 }
@@ -116,12 +117,12 @@ fn save_to_file(data: &HaversineData) {
 
 fn save_haversine_answer_to_file(data: &HaversineData) -> f64 {
     let pair_count = data.pairs.len();
-    let file = File::create(format!("data_{}_haveranswer.f64", pair_count))
-        .expect("Unable to create file");
+    let file =
+        File::create(format!("data_{pair_count}_haveranswer.f64")).expect("Unable to create file");
     let mut writer = BufWriter::new(file);
 
     let mut sum = 0f64;
-    for point in data.pairs.iter() {
+    for point in &data.pairs {
         let dist = reference_haversine(point, EARTH_RADIUS);
         sum += dist;
         writer
@@ -129,6 +130,7 @@ fn save_haversine_answer_to_file(data: &HaversineData) -> f64 {
             .expect("Failed to write to file");
     }
 
+    #[allow(clippy::cast_precision_loss)]
     let avg = sum / pair_count as f64;
     writer
         .write_all(&avg.to_le_bytes())
@@ -149,5 +151,5 @@ fn main() {
     println!("Method: {}", args.dist);
     println!("Random seed: {}", args.seed);
     println!("Pair count: {}", args.pair_count);
-    println!("Average: {:.16}", avg);
+    println!("Average: {avg:.16}");
 }

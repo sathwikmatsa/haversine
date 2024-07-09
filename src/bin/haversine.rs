@@ -14,12 +14,11 @@ struct Arguments {
 }
 
 fn pop_next_answer(answers: &mut VecDeque<f64>) -> f64 {
-    match answers.pop_front() {
-        Some(x) => x,
-        None => {
-            eprintln!("Error: validation input exhausted");
-            std::process::exit(1);
-        }
+    if let Some(ans) = answers.pop_front() {
+        ans
+    } else {
+        eprintln!("Error: validation input exhausted");
+        std::process::exit(1);
     }
 }
 
@@ -36,6 +35,7 @@ fn read_input(input_json: File, validation_answers_f64: Option<File>) -> InputCo
             .map(&input_json)
             .expect("create file mmap")
     };
+    drop(input_json);
     let input_size = mmap.len();
     let input: HaversineData = serde_json::from_slice(&mmap).expect("deserialize input data");
     let validate = validation_answers_f64.is_some();
@@ -79,7 +79,7 @@ fn calculate_haversine_with_validation(input_json: File, validation_answers_f64:
     let mut sum = 0f64;
     let pair_count = input.pairs.len();
 
-    for point in input.pairs.into_iter() {
+    for point in input.pairs {
         let dist = reference_haversine(&point, EARTH_RADIUS);
         sum += dist;
         if validate {
@@ -98,16 +98,17 @@ fn calculate_haversine_with_validation(input_json: File, validation_answers_f64:
             }
         }
     }
+    #[allow(clippy::cast_precision_loss)]
     let avg = sum / pair_count as f64;
-    println!("Input size: {}", input_size);
-    println!("Pair count: {}", pair_count);
-    println!("Haversine avg: {}", avg);
+    println!("Input size: {input_size}");
+    println!("Pair count: {pair_count}");
+    println!("Haversine avg: {avg}");
 
     if validate {
         let ref_avg = pop_next_answer(&mut answers);
         println!();
         println!("Validation:");
-        println!("Reference avg: {}", ref_avg);
+        println!("Reference avg: {ref_avg}");
         println!("Difference: {}", ref_avg - avg);
     }
 }
