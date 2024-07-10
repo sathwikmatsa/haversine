@@ -37,7 +37,8 @@ fn read_input(input_json: File, validation_answers_f64: Option<File>) -> InputCo
     };
     drop(input_json);
     let input_size = mmap.len();
-    let input: HaversineData = serde_json::from_slice(&mmap).expect("deserialize input data");
+    // let input: HaversineData = serde_json::from_slice(&mmap).expect("deserialize input data");
+    let input = HaversineData::parse_from_json_slice(&mmap).expect("deserialize input data");
     let validate = validation_answers_f64.is_some();
 
     let answers: VecDeque<f64> = match validation_answers_f64 {

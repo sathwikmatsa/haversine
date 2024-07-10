@@ -1,3 +1,5 @@
+mod deserializer;
+
 use serde::{Deserialize, Serialize};
 
 pub const EARTH_RADIUS: f64 = 6372.8f64;
@@ -6,7 +8,7 @@ pub const X_HIGH: f64 = 180f64;
 pub const Y_LOW: f64 = -90f64;
 pub const Y_HIGH: f64 = 90f64;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct HaversineDataPoint {
     pub x0: f64,
     pub y0: f64,
@@ -14,13 +16,14 @@ pub struct HaversineDataPoint {
     pub y1: f64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct HaversineData {
     pub pairs: Vec<HaversineDataPoint>,
 }
 
 // Reference: https://github.com/cmuratori/computer_enhance/blob/a6e9cb2a7b57e450ba2e7b75d0fd3e36ffa72d7d/perfaware/part2/listing_0065_haversine_formula.cpp
-#[must_use] pub fn reference_haversine(point: &HaversineDataPoint, radius: f64) -> f64 {
+#[must_use]
+pub fn reference_haversine(point: &HaversineDataPoint, radius: f64) -> f64 {
     let lat1 = point.y0;
     let lat2 = point.y1;
     let lon1 = point.x0;

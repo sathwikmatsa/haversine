@@ -4,6 +4,7 @@ use std::{
     io::{BufWriter, Write},
 };
 
+use byteorder::{LittleEndian, WriteBytesExt};
 use clap::{Parser, ValueEnum};
 use haversine::{
     reference_haversine, HaversineData, HaversineDataPoint, EARTH_RADIUS, X_HIGH, X_LOW, Y_HIGH,
@@ -14,6 +15,8 @@ use rand::{
     Rng, SeedableRng,
 };
 use rand_chacha::ChaCha8Rng;
+use serde::Serialize;
+use serde_json::ser::PrettyFormatter;
 
 #[derive(Clone, Copy, ValueEnum)]
 enum HaversineDist {
@@ -104,15 +107,13 @@ fn generate_haversine_data_cluster(n: usize, seed: u64) -> HaversineData {
 }
 
 fn save_to_file(data: &HaversineData) {
-    let contents = serde_json::to_string(data).expect("Unable to serialize");
     let file = File::create(format!("data_{}_flex.json", data.pairs.len()))
         .expect("Unable to create file");
-    let mut writer = BufWriter::new(file);
-    writer
-        .write_all(contents.as_bytes())
+    let writer = BufWriter::new(file);
+    let mut serializer =
+        serde_json::Serializer::with_formatter(writer, PrettyFormatter::with_indent(b"  "));
+    data.serialize(&mut serializer)
         .expect("Unable to write data");
-
-    writer.flush().expect("Failed to flush buffer");
 }
 
 fn save_haversine_answer_to_file(data: &HaversineData) -> f64 {
@@ -126,14 +127,14 @@ fn save_haversine_answer_to_file(data: &HaversineData) -> f64 {
         let dist = reference_haversine(point, EARTH_RADIUS);
         sum += dist;
         writer
-            .write_all(&dist.to_le_bytes())
+            .write_f64::<LittleEndian>(dist)
             .expect("Failed to write to file");
     }
 
     #[allow(clippy::cast_precision_loss)]
     let avg = sum / pair_count as f64;
     writer
-        .write_all(&avg.to_le_bytes())
+        .write_f64::<LittleEndian>(avg)
         .expect("Failed to write to file");
 
     writer.flush().expect("Failed to flush buffer");
