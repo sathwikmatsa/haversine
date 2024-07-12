@@ -1,4 +1,5 @@
 mod deserializer;
+pub mod perf;
 
 use serde::{Deserialize, Serialize};
 
