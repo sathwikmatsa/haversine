@@ -40,9 +40,8 @@ fn get_os_timer_freq() -> u64 {
 
 #[allow(clippy::cast_sign_loss)]
 fn read_os_timer() -> u64 {
-    let cur = ClockId::CLOCK_REALTIME_ALARM
-        .now()
-        .expect("Get current clock");
+    // https://berthub.eu/articles/posts/on-linux-vdso-and-clockgettime/
+    let cur = ClockId::CLOCK_REALTIME.now().expect("Get current clock");
     cur.tv_sec() as u64 * get_os_timer_freq() + cur.tv_nsec() as u64
 }
 
