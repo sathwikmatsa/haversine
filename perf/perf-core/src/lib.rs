@@ -1,12 +1,15 @@
-use std::{collections::HashMap, sync::Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Mutex, OnceLock},
+};
 
 use lazy_static::lazy_static;
 use nix::time::ClockId;
 
 lazy_static! {
     static ref CPU_FREQ: u64 = estimate_cpu_freq(100);
-    static ref TRACE_MAP: Mutex<HashMap<&'static str, Trace>> = Mutex::new(HashMap::new());
-    static ref TRACE_ORDER: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    static ref TRACE_MAP: Mutex<HashMap<String, Trace>> = Mutex::new(HashMap::new());
+    static ref TRACE_ORDER: Mutex<Vec<String>> = Mutex::new(Vec::new());
 }
 
 struct Trace {
@@ -72,15 +75,15 @@ fn estimate_cpu_freq(millis_to_wait: u64) -> u64 {
 /// # Panics
 ///
 /// Repeated call with the same `id` will panic
-pub fn trace_begin(id: &'static str) {
+fn trace_begin(id: &str) {
     let mut trace_map = TRACE_MAP.lock().unwrap();
     debug_assert!(
         !trace_map.contains_key(id),
         "Trace already initiated for {id}"
     );
-    trace_map.insert(id, Trace::new(read_cpu_timer()));
+    trace_map.insert(id.to_owned(), Trace::new(read_cpu_timer()));
     let mut trace_order = TRACE_ORDER.lock().unwrap();
-    trace_order.push(id);
+    trace_order.push(id.to_owned());
 }
 
 /// Captures the timestamp counter for the end of `id`
@@ -89,7 +92,7 @@ pub fn trace_begin(id: &'static str) {
 ///
 /// Calling this function without prior call to `trace_begin` will panic.
 /// Repeated call with the same `id` will panic.
-pub fn trace_end(id: &'static str) {
+fn trace_end(id: &str) {
     let mut trace_map = TRACE_MAP.lock().unwrap();
     let trace = trace_map.get_mut(id);
     debug_assert!(trace.is_some(), "Trace not initialized for {id}");
@@ -99,24 +102,60 @@ pub fn trace_end(id: &'static str) {
     }
 }
 
+fn start_ts() -> &'static u64 {
+    static START_TS: OnceLock<u64> = OnceLock::new();
+    START_TS.get_or_init(|| read_cpu_timer())
+}
+
+fn end_ts() -> &'static u64 {
+    static END_TS: OnceLock<u64> = OnceLock::new();
+    END_TS.get_or_init(|| read_cpu_timer())
+}
+
+pub fn begin_profile() {
+    let _ = start_ts();
+}
+
 /// Prints the stats for captures traces to stdout
 ///
 /// # Panics
 ///
 /// Will panic if any of the traces were not ended.
 #[allow(clippy::cast_precision_loss)]
-pub fn trace_stats() {
-    let trace_map = TRACE_MAP.lock().unwrap();
-    let cpu_time: u64 = trace_map.values().map(Trace::delta).sum();
+pub fn end_and_print_profile() {
+    let end = *end_ts();
+    let start = *start_ts();
+    assert!(end > start, "ERROR: Profile end time is earlier than start time. `begin_profile` call should precede `end_and_print_profile` call.");
+    let cpu_time: u64 = end - start;
     let cpu_freq = *CPU_FREQ;
     let total_time_ms: f64 = (1000f64 * cpu_time as f64) / cpu_freq as f64;
     println!("Total time: {total_time_ms} ms (CPU freq {cpu_freq})");
+    let trace_map = TRACE_MAP.lock().unwrap();
     let trace_order = TRACE_ORDER.lock().unwrap();
     for trace_key in trace_order.iter() {
         let trace = trace_map.get(trace_key).unwrap();
         let section_time = trace.delta();
         let percent = (section_time as f64 / cpu_time as f64) * 100.0;
         println!("  {trace_key}: {section_time} ({percent:.2}%)");
+    }
+}
+
+pub struct ScopedTrace {
+    ident: String,
+}
+
+impl ScopedTrace {
+    pub fn new(ident: impl AsRef<str>) -> Self {
+        trace_begin(ident.as_ref());
+        Self {
+            ident: ident.as_ref().to_owned(),
+        }
+    }
+}
+
+impl Drop for ScopedTrace {
+    fn drop(&mut self) {
+        trace_end(self.ident.as_str());
     }
 }
 

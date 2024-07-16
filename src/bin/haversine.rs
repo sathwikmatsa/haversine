@@ -4,7 +4,6 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use clap::{error::ErrorKind, CommandFactory, Parser};
 use haversine::{reference_haversine, HaversineData, EARTH_RADIUS};
 use memmap2::MmapOptions;
-use perf::{trace_begin, trace_end, trace_stats};
 
 #[derive(Parser, Debug)]
 struct Arguments {
@@ -30,34 +29,28 @@ struct InputConf {
     validate: bool,
 }
 
+#[perf::instrument]
 fn read_input(input_json: File, validation_answers_f64: Option<File>) -> InputConf {
-    trace_begin("ReadInput");
     let mmap = unsafe {
         MmapOptions::new()
             .map(&input_json)
             .expect("create file mmap")
     };
     drop(input_json);
-    trace_end("ReadInput");
     let input_size = mmap.len();
     // let input: HaversineData = serde_json::from_slice(&mmap).expect("deserialize input data");
-    trace_begin("ParseInput");
     let input = HaversineData::parse_from_json_slice(&mmap).expect("deserialize input data");
-    trace_end("ParseInput");
     let validate = validation_answers_f64.is_some();
 
     let answers: VecDeque<f64> = match validation_answers_f64 {
         None => VecDeque::new(),
         #[allow(clippy::uninit_vec)]
         Some(f) => {
-            trace_begin("ReadAnswers");
             let ans_mmap = unsafe {
                 MmapOptions::new()
                     .map(&f)
                     .expect("create answers file mmap")
             };
-            trace_end("ReadAnswers");
-            trace_begin("ParseAnswers");
             let mut buf_reader = BufReader::new(f);
             let f64_array_size = ans_mmap.len() / std::mem::size_of::<f64>();
             let mut buffer: Vec<f64> = Vec::with_capacity(f64_array_size);
@@ -65,7 +58,6 @@ fn read_input(input_json: File, validation_answers_f64: Option<File>) -> InputCo
             buf_reader
                 .read_f64_into::<LittleEndian>(&mut buffer[..])
                 .expect("read f64s");
-            trace_end("ParseAnswers");
             buffer.into()
         }
     };
@@ -86,7 +78,6 @@ fn calculate_haversine_with_validation(input_json: File, validation_answers_f64:
         validate,
     } = read_input(input_json, validation_answers_f64);
 
-    trace_begin("Sum");
     let mut sum = 0f64;
     let pair_count = input.pairs.len();
 
@@ -109,8 +100,6 @@ fn calculate_haversine_with_validation(input_json: File, validation_answers_f64:
             }
         }
     }
-    trace_end("Sum");
-    trace_begin("Output");
     #[allow(clippy::cast_precision_loss)]
     let avg = sum / pair_count as f64;
     println!("Input size: {input_size}");
@@ -125,11 +114,10 @@ fn calculate_haversine_with_validation(input_json: File, validation_answers_f64:
         println!("Difference: {}", ref_avg - avg);
     }
     println!();
-    trace_end("Output");
 }
 
 fn main() {
-    trace_begin("Startup");
+    perf::begin_profile();
     let args = Arguments::parse();
     let input = match File::open(&args.data_file) {
         Ok(f) => f,
@@ -153,8 +141,6 @@ fn main() {
         },
         None => None,
     };
-    trace_end("Startup");
     calculate_haversine_with_validation(input, answers);
-
-    trace_stats();
+    perf::end_and_print_profile();
 }
