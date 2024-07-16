@@ -1,0 +1,8 @@
+[package]
+name = "perf"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+perf-core = { path = "./perf-core" }
+perf-attributes = { path = "./perf-attributes" }

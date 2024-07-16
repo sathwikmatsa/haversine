@@ -109,8 +109,8 @@ pub fn trace_stats() {
     let trace_map = TRACE_MAP.lock().unwrap();
     let cpu_time: u64 = trace_map.values().map(Trace::delta).sum();
     let cpu_freq = *CPU_FREQ;
-    let total_time: f64 = cpu_time as f64 / cpu_freq as f64;
-    println!("Total time: {total_time} (CPU freq {cpu_freq})");
+    let total_time_ms: f64 = (1000f64 * cpu_time as f64) / cpu_freq as f64;
+    println!("Total time: {total_time_ms} ms (CPU freq {cpu_freq})");
     let trace_order = TRACE_ORDER.lock().unwrap();
     for trace_key in trace_order.iter() {
         let trace = trace_map.get(trace_key).unwrap();

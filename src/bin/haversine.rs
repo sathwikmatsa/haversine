@@ -2,11 +2,9 @@ use std::{collections::VecDeque, fs::File, io::BufReader, path::PathBuf};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use clap::{error::ErrorKind, CommandFactory, Parser};
-use haversine::{
-    perf::{trace_begin, trace_end, trace_stats},
-    reference_haversine, HaversineData, EARTH_RADIUS,
-};
+use haversine::{reference_haversine, HaversineData, EARTH_RADIUS};
 use memmap2::MmapOptions;
+use perf::{trace_begin, trace_end, trace_stats};
 
 #[derive(Parser, Debug)]
 struct Arguments {
