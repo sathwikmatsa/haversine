@@ -1,3 +1,6 @@
+#![feature(stmt_expr_attributes)]
+#![feature(proc_macro_hygiene)]
+
 use std::{collections::VecDeque, fs::File, io::BufReader, path::PathBuf};
 
 use byteorder::{LittleEndian, ReadBytesExt};
@@ -81,6 +84,7 @@ fn calculate_haversine_with_validation(input_json: File, validation_answers_f64:
     let mut sum = 0f64;
     let pair_count = input.pairs.len();
 
+    #[perf::instrument_loop("calculate distance")]
     for point in input.pairs {
         let dist = reference_haversine(&point, EARTH_RADIUS);
         sum += dist;
