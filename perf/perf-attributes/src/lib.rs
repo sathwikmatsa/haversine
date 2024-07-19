@@ -7,12 +7,10 @@ pub fn instrument(
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
     let mut input = syn::parse_macro_input!(item as ItemFn);
-    let fn_name = input.sig.ident.to_string();
-    let trace_name = format!("fn::{}", fn_name);
     let block = input.block.as_mut();
     block.stmts.insert(
         0,
-        parse_quote! { let __trace_fn = perf::ScopedTrace::new(#trace_name);},
+        parse_quote! { let __trace_fn = perf::ScopedTrace::new(format!("{}::fn", perf::function_name!()));},
     );
     let gen = quote! {#input};
     gen.into()
@@ -31,9 +29,8 @@ pub fn instrument_loop(
             .into();
     }
     let loop_name = syn::parse_macro_input!(args as LitStr).value();
-    let trace_name = format!("loop::{}", loop_name);
     let gen = quote! {{
-        let __trace_loop = perf::ScopedTrace::new(#trace_name);
+        let __trace_loop = perf::ScopedTrace::new(format!("{}::{}::loop", perf::function_name!(), #loop_name));
         #input
     }};
     gen.into()

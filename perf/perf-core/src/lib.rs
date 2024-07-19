@@ -18,7 +18,7 @@ struct Trace {
     begin: u64,
     elapsed: u64,
     hit_count: usize,
-    id: usize,
+    order: usize,
 }
 
 impl Default for Trace {
@@ -27,7 +27,7 @@ impl Default for Trace {
             begin: 0,
             elapsed: 0,
             hit_count: 0,
-            id: unsafe { TRACE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst) },
+            order: unsafe { TRACE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst) },
         }
     }
 }
@@ -128,7 +128,7 @@ pub fn end_and_print_profile() {
 
     let trace_map = TRACE_MAP.lock().unwrap();
     let mut trace_ids = trace_map.keys().collect::<Vec<_>>();
-    trace_ids.sort_unstable_by_key(|k| trace_map.get(*k).unwrap().id);
+    trace_ids.sort_unstable_by_key(|k| trace_map.get(*k).unwrap().order);
     for trace_id in trace_ids.into_iter() {
         let trace = trace_map.get(trace_id).unwrap();
         let elapsed = trace.elapsed;
