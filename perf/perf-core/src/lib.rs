@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    sync::{atomic::AtomicUsize, Mutex, OnceLock},
 };
 
 use lazy_static::lazy_static;
@@ -8,32 +8,33 @@ use nix::time::ClockId;
 
 lazy_static! {
     static ref CPU_FREQ: u64 = estimate_cpu_freq(100);
-    static ref TRACE_MAP: Mutex<HashMap<String, Trace>> = Mutex::new(HashMap::new());
-    static ref TRACE_ORDER: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static ref TRACE_MAP: Mutex<HashMap<&'static str, Trace>> =
+        Mutex::new(HashMap::with_capacity(4096));
 }
+
+static mut TRACE_ID: AtomicUsize = AtomicUsize::new(0);
 
 struct Trace {
-    begin: Option<u64>,
-    end: Option<u64>,
+    begin: u64,
+    elapsed: u64,
+    hit_count: usize,
+    id: usize,
 }
 
-// TODO(sathwik): Use Typestate pattern https://cliffle.com/blog/rust-typestate/
-impl Trace {
-    fn new(begin: u64) -> Self {
+impl Default for Trace {
+    fn default() -> Self {
         Self {
-            begin: Some(begin),
-            end: None,
+            begin: 0,
+            elapsed: 0,
+            hit_count: 0,
+            id: unsafe { TRACE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst) },
         }
     }
+}
 
-    fn end(&mut self, end: u64) {
-        debug_assert!(self.begin.unwrap() < end);
-        self.end = Some(end);
-    }
-
-    fn delta(&self) -> u64 {
-        debug_assert!(self.end.is_some());
-        unsafe { self.end.unwrap_unchecked() - self.begin.unwrap_unchecked() }
+impl Trace {
+    fn reset(&mut self, begin: u64) {
+        self.begin = begin;
     }
 }
 
@@ -70,92 +71,70 @@ fn estimate_cpu_freq(millis_to_wait: u64) -> u64 {
     os_freq * cpu_elapsed / os_elapsed
 }
 
-/// Captures the timestamp counter for the start of `id`
-///
-/// # Panics
-///
-/// Repeated call with the same `id` will panic
-fn trace_begin(id: &str) {
-    let mut trace_map = TRACE_MAP.lock().unwrap();
-    debug_assert!(
-        !trace_map.contains_key(id),
-        "Trace already initiated for {id}"
-    );
-    trace_map.insert(id.to_owned(), Trace::new(read_cpu_timer()));
-    let mut trace_order = TRACE_ORDER.lock().unwrap();
-    trace_order.push(id.to_owned());
-}
-
-/// Captures the timestamp counter for the end of `id`
-///
-/// # Panics
-///
-/// Calling this function without prior call to `trace_begin` will panic.
-/// Repeated call with the same `id` will panic.
-fn trace_end(id: &str) {
-    let mut trace_map = TRACE_MAP.lock().unwrap();
-    let trace = trace_map.get_mut(id);
-    debug_assert!(trace.is_some(), "Trace not initialized for {id}");
-    if let Some(t) = trace {
-        debug_assert!(t.end.is_none(), "Trace already ended for {id}");
-        t.end(read_cpu_timer());
-    }
-}
-
 fn start_ts() -> &'static u64 {
     static START_TS: OnceLock<u64> = OnceLock::new();
     START_TS.get_or_init(|| read_cpu_timer())
 }
 
-fn end_ts() -> &'static u64 {
-    static END_TS: OnceLock<u64> = OnceLock::new();
-    END_TS.get_or_init(|| read_cpu_timer())
-}
-
-pub fn begin_profile() {
-    let _ = start_ts();
-}
-
-/// Prints the stats for captures traces to stdout
-///
-/// # Panics
-///
-/// Will panic if any of the traces were not ended.
-#[allow(clippy::cast_precision_loss)]
-pub fn end_and_print_profile() {
-    let end = *end_ts();
-    let start = *start_ts();
-    assert!(end > start, "ERROR: Profile end time is earlier than start time. `begin_profile` call should precede `end_and_print_profile` call.");
-    let cpu_time: u64 = end - start;
-    let cpu_freq = *CPU_FREQ;
-    let total_time_ms: f64 = (1000f64 * cpu_time as f64) / cpu_freq as f64;
-    println!("Total time: {total_time_ms} ms (CPU freq {cpu_freq})");
-    let trace_map = TRACE_MAP.lock().unwrap();
-    let trace_order = TRACE_ORDER.lock().unwrap();
-    for trace_key in trace_order.iter() {
-        let trace = trace_map.get(trace_key).unwrap();
-        let section_time = trace.delta();
-        let percent = (section_time as f64 / cpu_time as f64) * 100.0;
-        println!("  {trace_key}: {section_time} ({percent:.2}%)");
-    }
-}
-
 pub struct ScopedTrace {
-    ident: String,
+    ident: &'static str,
 }
 
 impl ScopedTrace {
     pub fn new(ident: impl AsRef<str>) -> Self {
-        trace_begin(ident.as_ref());
-        Self {
-            ident: ident.as_ref().to_owned(),
-        }
+        let ident: &'static str = ident.as_ref().to_owned().leak();
+        let mut trace_map = TRACE_MAP.lock().unwrap();
+        let trace = trace_map.entry(ident).or_default();
+        trace.reset(read_cpu_timer());
+        Self { ident }
     }
 }
 
 impl Drop for ScopedTrace {
     fn drop(&mut self) {
-        trace_end(self.ident.as_str());
+        let mut trace_map = TRACE_MAP.lock().unwrap();
+        let trace = trace_map.get_mut(self.ident).unwrap();
+        trace.elapsed += read_cpu_timer() - trace.begin;
+        trace.hit_count += 1;
+    }
+}
+
+/// Initializes profile environment.
+/// Ideally, this should be invoked during program start up.
+pub fn begin_profile() {
+    // initialize lazy statics
+    lazy_static::initialize(&CPU_FREQ);
+    lazy_static::initialize(&TRACE_MAP);
+
+    // capture profile start time
+    let _ = start_ts();
+}
+
+/// Prints the perf timings of captured traces to stdout
+///
+/// # Panics
+///
+/// Will panic if `begin_profile` is not invoked before calling this fn
+#[allow(clippy::cast_precision_loss)]
+pub fn end_and_print_profile() {
+    let end = read_cpu_timer();
+    let start = *start_ts();
+    assert!(end > start, "ERROR: Profile end time is earlier than start time. `begin_profile` call should precede `end_and_print_profile` call.");
+
+    let cpu_time: u64 = end - start;
+    let cpu_freq = *CPU_FREQ;
+    let total_time_ms: f64 = (1000f64 * cpu_time as f64) / cpu_freq as f64;
+    println!("Total time: {total_time_ms} ms (CPU freq {cpu_freq})");
+
+    let trace_map = TRACE_MAP.lock().unwrap();
+    let mut trace_ids = trace_map.keys().collect::<Vec<_>>();
+    trace_ids.sort_unstable_by_key(|k| trace_map.get(*k).unwrap().id);
+    for trace_id in trace_ids.into_iter() {
+        let trace = trace_map.get(trace_id).unwrap();
+        let elapsed = trace.elapsed;
+        let hits = trace.hit_count;
+        let percent = (elapsed as f64 / cpu_time as f64) * 100.0;
+        println!("  {trace_id}[{hits}]: {elapsed} ({percent:.2}%)");
     }
 }
 
