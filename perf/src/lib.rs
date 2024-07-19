@@ -18,7 +18,7 @@ macro_rules! function_name {
 #[macro_export]
 macro_rules! trace_section {
     ($name:expr, $($s:stmt);+ $(;)?) => {
-        let __trace_section = perf::ScopedTrace::new(format!("{}::{}::section", perf::function_name!(), $name));
+        let __trace_section = perf::ScopedTrace::new_section(perf::function_name!(), $name);
         $($s)*
         drop(__trace_section);
     };

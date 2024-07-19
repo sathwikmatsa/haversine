@@ -10,7 +10,7 @@ pub fn instrument(
     let block = input.block.as_mut();
     block.stmts.insert(
         0,
-        parse_quote! { let __trace_fn = perf::ScopedTrace::new(format!("{}::fn", perf::function_name!()));},
+        parse_quote! { let __trace_fn = perf::ScopedTrace::new_fn(perf::function_name!());},
     );
     let gen = quote! {#input};
     gen.into()
@@ -30,7 +30,7 @@ pub fn instrument_loop(
     }
     let loop_name = syn::parse_macro_input!(args as LitStr).value();
     let gen = quote! {{
-        let __trace_loop = perf::ScopedTrace::new(format!("{}::{}::loop", perf::function_name!(), #loop_name));
+        let __trace_loop = perf::ScopedTrace::new_loop(perf::function_name!(), #loop_name);
         #input
     }};
     gen.into()

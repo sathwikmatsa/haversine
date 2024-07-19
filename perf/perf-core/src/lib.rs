@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
     sync::{atomic::AtomicUsize, Mutex, OnceLock},
 };
 
@@ -8,11 +9,37 @@ use nix::time::ClockId;
 
 lazy_static! {
     static ref CPU_FREQ: u64 = estimate_cpu_freq(100);
-    static ref TRACE_MAP: Mutex<HashMap<&'static str, Trace>> =
-        Mutex::new(HashMap::with_capacity(4096));
+    static ref TRACE_MAP: Mutex<HashMap<TraceId, Trace>> = Mutex::new(HashMap::with_capacity(4096));
 }
 
 static mut TRACE_ID: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(PartialEq, Eq, Hash, Copy, Clone)]
+enum TraceType {
+    Fn,
+    Loop(&'static str),
+    Section(&'static str),
+}
+
+#[derive(PartialEq, Eq, Hash, Copy, Clone)]
+struct TraceId {
+    enclosing_function_name: &'static str,
+    ty: TraceType,
+}
+
+impl Display for TraceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.ty {
+            TraceType::Fn => write!(f, "{}::fn", self.enclosing_function_name),
+            TraceType::Loop(lname) => {
+                write!(f, "{}::{}::loop", self.enclosing_function_name, lname)
+            }
+            TraceType::Section(sname) => {
+                write!(f, "{}::{}::section", self.enclosing_function_name, sname)
+            }
+        }
+    }
+}
 
 struct Trace {
     begin: u64,
@@ -77,23 +104,46 @@ fn start_ts() -> &'static u64 {
 }
 
 pub struct ScopedTrace {
-    ident: &'static str,
+    trace_id: TraceId,
 }
 
 impl ScopedTrace {
-    pub fn new(ident: impl AsRef<str>) -> Self {
-        let ident: &'static str = ident.as_ref().to_owned().leak();
+    fn new(trace_id: TraceId) -> Self {
         let mut trace_map = TRACE_MAP.lock().unwrap();
-        let trace = trace_map.entry(ident).or_default();
+        let trace = trace_map.entry(trace_id).or_default();
         trace.reset(read_cpu_timer());
-        Self { ident }
+        Self { trace_id }
+    }
+
+    pub fn new_fn(fn_name: &'static str) -> Self {
+        let trace_id = TraceId {
+            enclosing_function_name: fn_name,
+            ty: TraceType::Fn,
+        };
+        Self::new(trace_id)
+    }
+
+    pub fn new_loop(fn_name: &'static str, loop_name: &'static str) -> Self {
+        let trace_id = TraceId {
+            enclosing_function_name: fn_name,
+            ty: TraceType::Loop(loop_name),
+        };
+        Self::new(trace_id)
+    }
+
+    pub fn new_section(fn_name: &'static str, section_name: &'static str) -> Self {
+        let trace_id = TraceId {
+            enclosing_function_name: fn_name,
+            ty: TraceType::Section(section_name),
+        };
+        Self::new(trace_id)
     }
 }
 
 impl Drop for ScopedTrace {
     fn drop(&mut self) {
         let mut trace_map = TRACE_MAP.lock().unwrap();
-        let trace = trace_map.get_mut(self.ident).unwrap();
+        let trace = trace_map.get_mut(&self.trace_id).unwrap();
         trace.elapsed += read_cpu_timer() - trace.begin;
         trace.hit_count += 1;
     }
