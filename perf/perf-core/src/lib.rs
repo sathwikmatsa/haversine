@@ -24,6 +24,7 @@ impl<T> RacyUnsafeCell<T> {
     }
 }
 
+static CURRENT_TRACE: RacyUnsafeCell<Option<TraceId>> = RacyUnsafeCell::new(None);
 static TRACE_ID: RacyUnsafeCell<usize> = RacyUnsafeCell::new(0);
 
 unsafe fn trace_map() -> &'static mut HashMap<TraceId, Trace> {
@@ -68,6 +69,7 @@ struct Trace {
     begin: u64,
     elapsed: u64,
     hit_count: usize,
+    children_time: u64,
     order: usize,
 }
 
@@ -77,6 +79,7 @@ impl Default for Trace {
             begin: 0,
             elapsed: 0,
             hit_count: 0,
+            children_time: 0,
             order: unsafe {
                 let id = TRACE_ID.get();
                 *id += 1;
@@ -135,6 +138,7 @@ unsafe fn start_ts() -> u64 {
 /// This struct is only safe to be used in single-threaded program.
 pub struct ScopedTrace {
     trace_id: TraceId,
+    parent: Option<TraceId>,
 }
 
 impl ScopedTrace {
@@ -142,7 +146,10 @@ impl ScopedTrace {
         let trace_map = unsafe { trace_map() };
         let trace = trace_map.entry(trace_id).or_default();
         trace.reset(read_cpu_timer());
-        Self { trace_id }
+        let current = CURRENT_TRACE.get();
+        let parent = unsafe { *current };
+        unsafe { *current = Some(trace_id) }
+        Self { trace_id, parent }
     }
 
     pub fn new_fn(fn_name: &'static str) -> Self {
@@ -176,6 +183,11 @@ impl Drop for ScopedTrace {
         let trace = trace_map.get_mut(&self.trace_id).unwrap();
         trace.elapsed += read_cpu_timer() - trace.begin;
         trace.hit_count += 1;
+        let current = CURRENT_TRACE.get();
+        unsafe { *current = self.parent }
+        if let Some(parent_trace_id) = self.parent {
+            trace_map.get_mut(&parent_trace_id).unwrap().children_time += trace.elapsed;
+        }
     }
 }
 
@@ -222,9 +234,16 @@ pub fn end_and_print_profile() {
     for trace_id in trace_ids.into_iter() {
         let trace = trace_map.get(trace_id).unwrap();
         let elapsed = trace.elapsed;
+        let elapsed_wo_children = trace.elapsed - trace.children_time;
         let hits = trace.hit_count;
-        let percent = (elapsed as f64 / cpu_time as f64) * 100.0;
-        println!("  {trace_id}[{hits}]: {elapsed} ({percent:.2}%)");
+        if trace.children_time == 0 {
+            let percent = (elapsed as f64 / cpu_time as f64) * 100.0;
+            println!("  {trace_id}[{hits}]: {elapsed} ({percent:.2}%)");
+        } else {
+            let percent_wo_children = (elapsed_wo_children as f64 / cpu_time as f64) * 100.0;
+            let percent_w_children = (elapsed as f64 / cpu_time as f64) * 100.0;
+            println!("  {trace_id}[{hits}]: {elapsed} ({percent_wo_children:.2}%, {percent_w_children:.2}% w/ children)");
+        }
     }
 }
 
