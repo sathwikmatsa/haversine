@@ -1,6 +1,7 @@
 use quote::quote;
 use syn::{parse_quote, Error, Expr, ItemFn, LitStr};
 
+/// Safety: Cannot be used in a multi-threaded context
 #[proc_macro_attribute]
 pub fn instrument(
     _args: proc_macro::TokenStream,
@@ -16,6 +17,7 @@ pub fn instrument(
     gen.into()
 }
 
+/// Safety: Cannot be used in a multi-threaded context
 #[proc_macro_attribute]
 pub fn instrument_loop(
     args: proc_macro::TokenStream,

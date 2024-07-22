@@ -15,6 +15,7 @@ macro_rules! function_name {
     }};
 }
 
+/// Safety: Cannot be used in a multi-threaded context
 #[macro_export]
 macro_rules! trace_section {
     ($name:expr, $($s:stmt);+ $(;)?) => {

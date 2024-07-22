@@ -1,18 +1,41 @@
+#![feature(once_cell_get_mut)]
+
 use std::{
+    cell::{OnceCell, UnsafeCell},
     collections::HashMap,
     fmt::Display,
-    sync::{atomic::AtomicUsize, Mutex, OnceLock},
+    hash::Hash,
 };
 
-use lazy_static::lazy_static;
 use nix::time::ClockId;
 
-lazy_static! {
-    static ref CPU_FREQ: u64 = estimate_cpu_freq(100);
-    static ref TRACE_MAP: Mutex<HashMap<TraceId, Trace>> = Mutex::new(HashMap::with_capacity(4096));
+#[repr(transparent)]
+struct RacyUnsafeCell<T>(UnsafeCell<T>);
+
+unsafe impl<T> Sync for RacyUnsafeCell<T> {}
+
+impl<T> RacyUnsafeCell<T> {
+    const fn new(x: T) -> Self {
+        RacyUnsafeCell(UnsafeCell::new(x))
+    }
+
+    fn get(&self) -> *mut T {
+        self.0.get()
+    }
 }
 
-static mut TRACE_ID: AtomicUsize = AtomicUsize::new(0);
+static TRACE_ID: RacyUnsafeCell<usize> = RacyUnsafeCell::new(0);
+
+unsafe fn trace_map() -> &'static mut HashMap<TraceId, Trace> {
+    static CELL: RacyUnsafeCell<OnceCell<HashMap<TraceId, Trace>>> =
+        RacyUnsafeCell::new(OnceCell::new());
+    (*CELL.get()).get_mut_or_init(|| HashMap::with_capacity(4096))
+}
+
+unsafe fn cpu_freq() -> u64 {
+    static CELL: RacyUnsafeCell<OnceCell<u64>> = RacyUnsafeCell::new(OnceCell::new());
+    *(*CELL.get()).get_or_init(|| estimate_cpu_freq(100))
+}
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone)]
 enum TraceType {
@@ -54,7 +77,11 @@ impl Default for Trace {
             begin: 0,
             elapsed: 0,
             hit_count: 0,
-            order: unsafe { TRACE_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst) },
+            order: unsafe {
+                let id = TRACE_ID.get();
+                *id += 1;
+                *id
+            },
         }
     }
 }
@@ -98,18 +125,21 @@ fn estimate_cpu_freq(millis_to_wait: u64) -> u64 {
     os_freq * cpu_elapsed / os_elapsed
 }
 
-fn start_ts() -> &'static u64 {
-    static START_TS: OnceLock<u64> = OnceLock::new();
-    START_TS.get_or_init(|| read_cpu_timer())
+unsafe fn start_ts() -> u64 {
+    static CELL: RacyUnsafeCell<OnceCell<u64>> = RacyUnsafeCell::new(OnceCell::new());
+    *(*CELL.get()).get_or_init(|| read_cpu_timer())
 }
 
+/// # Safety
+///
+/// This struct is only safe to be used in single-threaded program.
 pub struct ScopedTrace {
     trace_id: TraceId,
 }
 
 impl ScopedTrace {
     fn new(trace_id: TraceId) -> Self {
-        let mut trace_map = TRACE_MAP.lock().unwrap();
+        let trace_map = unsafe { trace_map() };
         let trace = trace_map.entry(trace_id).or_default();
         trace.reset(read_cpu_timer());
         Self { trace_id }
@@ -142,7 +172,7 @@ impl ScopedTrace {
 
 impl Drop for ScopedTrace {
     fn drop(&mut self) {
-        let mut trace_map = TRACE_MAP.lock().unwrap();
+        let trace_map = unsafe { trace_map() };
         let trace = trace_map.get_mut(&self.trace_id).unwrap();
         trace.elapsed += read_cpu_timer() - trace.begin;
         trace.hit_count += 1;
@@ -151,13 +181,18 @@ impl Drop for ScopedTrace {
 
 /// Initializes profile environment.
 /// Ideally, this should be invoked during program start up.
+///
+/// # Safety
+///
+/// This function is only safe to call in single-threaded program.
+/// Invoking this function in a multi-threaded program can lead to UB.
 pub fn begin_profile() {
     // initialize lazy statics
-    lazy_static::initialize(&CPU_FREQ);
-    lazy_static::initialize(&TRACE_MAP);
+    let _ = unsafe { cpu_freq() };
+    let _ = unsafe { trace_map() };
 
     // capture profile start time
-    let _ = start_ts();
+    let _ = unsafe { start_ts() };
 }
 
 /// Prints the perf timings of captured traces to stdout
@@ -165,18 +200,23 @@ pub fn begin_profile() {
 /// # Panics
 ///
 /// Will panic if `begin_profile` is not invoked before calling this fn
+///
+/// # Safety
+///
+/// This function is only safe to call in single-threaded program.
+/// Invoking this function in a multi-threaded program can lead to UB.
 #[allow(clippy::cast_precision_loss)]
 pub fn end_and_print_profile() {
     let end = read_cpu_timer();
-    let start = *start_ts();
+    let start = unsafe { start_ts() };
     assert!(end > start, "ERROR: Profile end time is earlier than start time. `begin_profile` call should precede `end_and_print_profile` call.");
 
     let cpu_time: u64 = end - start;
-    let cpu_freq = *CPU_FREQ;
+    let cpu_freq = unsafe { cpu_freq() };
     let total_time_ms: f64 = (1000f64 * cpu_time as f64) / cpu_freq as f64;
     println!("Total time: {total_time_ms} ms (CPU freq {cpu_freq})");
 
-    let trace_map = TRACE_MAP.lock().unwrap();
+    let trace_map = unsafe { trace_map() };
     let mut trace_ids = trace_map.keys().collect::<Vec<_>>();
     trace_ids.sort_unstable_by_key(|k| trace_map.get(*k).unwrap().order);
     for trace_id in trace_ids.into_iter() {
