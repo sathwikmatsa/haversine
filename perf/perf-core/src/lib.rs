@@ -66,32 +66,26 @@ impl Display for TraceId {
 }
 
 struct Trace {
-    begin: u64,
-    elapsed: u64,
+    /// without children
+    elapsed_exclusive: i64,
+    /// with children
+    elapsed_inclusive: u64,
     hit_count: usize,
-    children_time: u64,
     order: usize,
 }
 
 impl Default for Trace {
     fn default() -> Self {
         Self {
-            begin: 0,
-            elapsed: 0,
+            elapsed_exclusive: 0,
+            elapsed_inclusive: 0,
             hit_count: 0,
-            children_time: 0,
             order: unsafe {
                 let id = TRACE_ID.get();
                 *id += 1;
                 *id
             },
         }
-    }
-}
-
-impl Trace {
-    fn reset(&mut self, begin: u64) {
-        self.begin = begin;
     }
 }
 
@@ -139,17 +133,25 @@ unsafe fn start_ts() -> u64 {
 pub struct ScopedTrace {
     trace_id: TraceId,
     parent: Option<TraceId>,
+    begin: u64,
+    old_elapsed_inclusive: u64,
 }
 
 impl ScopedTrace {
     fn new(trace_id: TraceId) -> Self {
         let trace_map = unsafe { trace_map() };
         let trace = trace_map.entry(trace_id).or_default();
-        trace.reset(read_cpu_timer());
+        let begin = read_cpu_timer();
+        let old_elapsed_inclusive = trace.elapsed_inclusive;
         let current = CURRENT_TRACE.get();
         let parent = unsafe { *current };
         unsafe { *current = Some(trace_id) }
-        Self { trace_id, parent }
+        Self {
+            trace_id,
+            parent,
+            begin,
+            old_elapsed_inclusive,
+        }
     }
 
     pub fn new_fn(fn_name: &'static str) -> Self {
@@ -181,12 +183,17 @@ impl Drop for ScopedTrace {
     fn drop(&mut self) {
         let trace_map = unsafe { trace_map() };
         let trace = trace_map.get_mut(&self.trace_id).unwrap();
-        trace.elapsed += read_cpu_timer() - trace.begin;
+        let time = read_cpu_timer() - self.begin;
+        trace.elapsed_exclusive += time as i64;
         trace.hit_count += 1;
+        trace.elapsed_inclusive = self.old_elapsed_inclusive + time;
         let current = CURRENT_TRACE.get();
         unsafe { *current = self.parent }
         if let Some(parent_trace_id) = self.parent {
-            trace_map.get_mut(&parent_trace_id).unwrap().children_time += trace.elapsed;
+            trace_map
+                .get_mut(&parent_trace_id)
+                .unwrap()
+                .elapsed_exclusive -= time as i64;
         }
     }
 }
@@ -233,16 +240,16 @@ pub fn end_and_print_profile() {
     trace_ids.sort_unstable_by_key(|k| trace_map.get(*k).unwrap().order);
     for trace_id in trace_ids.into_iter() {
         let trace = trace_map.get(trace_id).unwrap();
-        let elapsed = trace.elapsed;
-        let elapsed_wo_children = trace.elapsed - trace.children_time;
         let hits = trace.hit_count;
-        if trace.children_time == 0 {
+        if trace.elapsed_exclusive as u64 == trace.elapsed_inclusive {
+            let elapsed = trace.elapsed_inclusive;
             let percent = (elapsed as f64 / cpu_time as f64) * 100.0;
             println!("  {trace_id}[{hits}]: {elapsed} ({percent:.2}%)");
         } else {
-            let percent_wo_children = (elapsed_wo_children as f64 / cpu_time as f64) * 100.0;
-            let percent_w_children = (elapsed as f64 / cpu_time as f64) * 100.0;
-            println!("  {trace_id}[{hits}]: {elapsed} ({percent_wo_children:.2}%, {percent_w_children:.2}% w/ children)");
+            let percent_wo_children = (trace.elapsed_exclusive as f64 / cpu_time as f64) * 100.0;
+            let percent_w_children = (trace.elapsed_inclusive as f64 / cpu_time as f64) * 100.0;
+            let elapsed_self = trace.elapsed_exclusive;
+            println!("  {trace_id}[{hits}]: {elapsed_self} ({percent_wo_children:.2}%, {percent_w_children:.2}% w/ children)");
         }
     }
 }
