@@ -16,11 +16,20 @@ macro_rules! function_name {
 }
 
 /// Safety: Cannot be used in a multi-threaded context
+#[cfg(feature = "perf")]
 #[macro_export]
 macro_rules! trace_section {
     ($name:expr, $($s:stmt);+ $(;)?) => {
         let __trace_section = perf::ScopedTrace::new_section(perf::function_name!(), $name);
         $($s)*
         drop(__trace_section);
+    };
+}
+
+#[cfg(not(feature = "perf"))]
+#[macro_export]
+macro_rules! trace_section {
+    ($name:expr, $($s:stmt);+ $(;)?) => {
+        $($s)*
     };
 }

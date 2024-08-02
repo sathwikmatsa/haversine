@@ -1,92 +1,19 @@
 #![feature(once_cell_get_mut)]
 
-use std::{
-    cell::{OnceCell, UnsafeCell},
-    collections::HashMap,
-    fmt::Display,
-    hash::Hash,
-};
+mod racy_unsafe_cell;
+use racy_unsafe_cell::RacyUnsafeCell;
+use std::cell::OnceCell;
 
 use nix::time::ClockId;
 
-#[repr(transparent)]
-struct RacyUnsafeCell<T>(UnsafeCell<T>);
-
-unsafe impl<T> Sync for RacyUnsafeCell<T> {}
-
-impl<T> RacyUnsafeCell<T> {
-    const fn new(x: T) -> Self {
-        RacyUnsafeCell(UnsafeCell::new(x))
-    }
-
-    fn get(&self) -> *mut T {
-        self.0.get()
-    }
-}
-
-static CURRENT_TRACE: RacyUnsafeCell<Option<TraceId>> = RacyUnsafeCell::new(None);
-static TRACE_ID: RacyUnsafeCell<usize> = RacyUnsafeCell::new(0);
-
-unsafe fn trace_map() -> &'static mut HashMap<TraceId, Trace> {
-    static CELL: RacyUnsafeCell<OnceCell<HashMap<TraceId, Trace>>> =
-        RacyUnsafeCell::new(OnceCell::new());
-    (*CELL.get()).get_mut_or_init(|| HashMap::with_capacity(4096))
-}
+#[cfg(feature = "perf")]
+pub mod trace;
+#[cfg(feature = "perf")]
+use trace::*;
 
 unsafe fn cpu_freq() -> u64 {
     static CELL: RacyUnsafeCell<OnceCell<u64>> = RacyUnsafeCell::new(OnceCell::new());
     *(*CELL.get()).get_or_init(|| estimate_cpu_freq(100))
-}
-
-#[derive(PartialEq, Eq, Hash, Copy, Clone)]
-enum TraceType {
-    Fn,
-    Loop(&'static str),
-    Section(&'static str),
-}
-
-#[derive(PartialEq, Eq, Hash, Copy, Clone)]
-struct TraceId {
-    enclosing_function_name: &'static str,
-    ty: TraceType,
-}
-
-impl Display for TraceId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.ty {
-            TraceType::Fn => write!(f, "{}::fn", self.enclosing_function_name),
-            TraceType::Loop(lname) => {
-                write!(f, "{}::{}::loop", self.enclosing_function_name, lname)
-            }
-            TraceType::Section(sname) => {
-                write!(f, "{}::{}::section", self.enclosing_function_name, sname)
-            }
-        }
-    }
-}
-
-struct Trace {
-    /// without children
-    elapsed_exclusive: i64,
-    /// with children
-    elapsed_inclusive: u64,
-    hit_count: usize,
-    order: usize,
-}
-
-impl Default for Trace {
-    fn default() -> Self {
-        Self {
-            elapsed_exclusive: 0,
-            elapsed_inclusive: 0,
-            hit_count: 0,
-            order: unsafe {
-                let id = TRACE_ID.get();
-                *id += 1;
-                *id
-            },
-        }
-    }
 }
 
 fn get_os_timer_freq() -> u64 {
@@ -130,6 +57,7 @@ unsafe fn start_ts() -> u64 {
 /// # Safety
 ///
 /// This struct is only safe to be used in single-threaded program.
+#[cfg(feature = "perf")]
 pub struct ScopedTrace {
     trace_id: TraceId,
     parent: Option<TraceId>,
@@ -137,6 +65,7 @@ pub struct ScopedTrace {
     old_elapsed_inclusive: u64,
 }
 
+#[cfg(feature = "perf")]
 impl ScopedTrace {
     fn new(trace_id: TraceId) -> Self {
         let trace_map = unsafe { trace_map() };
@@ -179,6 +108,7 @@ impl ScopedTrace {
     }
 }
 
+#[cfg(feature = "perf")]
 impl Drop for ScopedTrace {
     fn drop(&mut self) {
         let trace_map = unsafe { trace_map() };
@@ -205,6 +135,7 @@ impl Drop for ScopedTrace {
 ///
 /// This function is only safe to call in single-threaded program.
 /// Invoking this function in a multi-threaded program can lead to UB.
+#[cfg(feature = "perf")]
 pub fn begin_profile() {
     // initialize lazy statics
     let _ = unsafe { cpu_freq() };
@@ -224,6 +155,7 @@ pub fn begin_profile() {
 ///
 /// This function is only safe to call in single-threaded program.
 /// Invoking this function in a multi-threaded program can lead to UB.
+#[cfg(feature = "perf")]
 #[allow(clippy::cast_precision_loss)]
 pub fn end_and_print_profile() {
     let end = read_cpu_timer();
@@ -254,36 +186,29 @@ pub fn end_and_print_profile() {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[cfg(not(feature = "perf"))]
+pub fn begin_profile() {
+    let _ = unsafe { start_ts() };
+}
 
-    #[test]
-    #[allow(clippy::pedantic)]
-    fn playground() {
-        let milliseconds_to_wait = 1_00u64;
-        let os_freq = get_os_timer_freq();
-        println!("OS Freq: {os_freq}");
+#[cfg(not(feature = "perf"))]
+pub fn end_and_print_profile() {
+    let end = read_cpu_timer();
+    let start = unsafe { start_ts() };
+    assert!(end > start, "ERROR: Profile end time is earlier than start time. `begin_profile` call should precede `end_and_print_profile` call.");
 
-        let cpu_start = read_cpu_timer();
-        let os_start = read_os_timer();
+    let cpu_time: u64 = end - start;
+    let cpu_freq = unsafe { cpu_freq() };
+    let total_time_ms: f64 = (1000f64 * cpu_time as f64) / cpu_freq as f64;
+    println!("Total time: {total_time_ms} ms (CPU freq {cpu_freq})");
+}
 
-        let mut os_end = 0u64;
-        let mut os_elapsed = 0u64;
-        let os_wait_time = os_freq * milliseconds_to_wait / 1000;
-        while os_elapsed < os_wait_time {
-            os_end = read_os_timer();
-            os_elapsed = os_end - os_start;
-        }
+#[cfg(not(feature = "perf"))]
+pub struct ScopedTrace {}
 
-        let cpu_end = read_cpu_timer();
-        let cpu_elapsed = cpu_end - cpu_start;
-        let cpu_freq = os_freq * cpu_elapsed / os_elapsed;
-
-        println!("OS Timer: {os_start} -> {os_end} = {os_elapsed}");
-        println!("OS Seconds: {}", os_elapsed as f64 / os_freq as f64);
-
-        println!("CPU Timer: {cpu_start} -> {cpu_end} = {cpu_elapsed}");
-        println!("CPU Freq: {cpu_freq}");
+#[cfg(not(feature = "perf"))]
+impl ScopedTrace {
+    pub fn new_section(_: &'static str, _: &'static str) -> Self {
+        Self {}
     }
 }

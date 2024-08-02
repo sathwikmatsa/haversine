@@ -3,6 +3,9 @@ name = "perf"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+perf = ["perf-core/perf", "perf-attributes/perf"]
+
 [dependencies]
 perf-core = { path = "./perf-core" }
 perf-attributes = { path = "./perf-attributes" }

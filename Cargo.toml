@@ -3,6 +3,9 @@ name = "haversine"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+enable-perf = ["perf/perf"]
+
 [dependencies]
 clap = { version = "4.5.5", features = ["derive"] }
 rand = "0.8.5"

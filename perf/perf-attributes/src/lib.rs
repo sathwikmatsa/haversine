@@ -1,8 +1,12 @@
-use quote::quote;
-use syn::{parse_quote, Error, Expr, ItemFn, LitStr};
+#[cfg(feature = "perf")]
+use {
+    quote::quote,
+    syn::{parse_quote, Error, Expr, ItemFn, LitStr},
+};
 
 /// Safety: Cannot be used in a multi-threaded context
 #[proc_macro_attribute]
+#[cfg(feature = "perf")]
 pub fn instrument(
     _args: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
@@ -17,8 +21,18 @@ pub fn instrument(
     gen.into()
 }
 
+#[proc_macro_attribute]
+#[cfg(not(feature = "perf"))]
+pub fn instrument(
+    _args: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    item
+}
+
 /// Safety: Cannot be used in a multi-threaded context
 #[proc_macro_attribute]
+#[cfg(feature = "perf")]
 pub fn instrument_loop(
     args: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
@@ -36,4 +50,13 @@ pub fn instrument_loop(
         #input
     }};
     gen.into()
+}
+
+#[proc_macro_attribute]
+#[cfg(not(feature = "perf"))]
+pub fn instrument_loop(
+    _args: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    item
 }
