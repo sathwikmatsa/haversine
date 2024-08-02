@@ -11,9 +11,12 @@ pub mod trace;
 #[cfg(feature = "perf")]
 use trace::*;
 
-unsafe fn cpu_freq() -> u64 {
+type ReadTimer = fn() -> u64;
+static READ_TIMER: ReadTimer = read_cpu_timer;
+
+unsafe fn timer_freq() -> u64 {
     static CELL: RacyUnsafeCell<OnceCell<u64>> = RacyUnsafeCell::new(OnceCell::new());
-    *(*CELL.get()).get_or_init(|| estimate_cpu_freq(100))
+    *(*CELL.get()).get_or_init(|| estimate_timer_freq(100))
 }
 
 fn get_os_timer_freq() -> u64 {
@@ -31,9 +34,9 @@ fn read_cpu_timer() -> u64 {
     unsafe { core::arch::x86_64::_rdtsc() }
 }
 
-fn estimate_cpu_freq(millis_to_wait: u64) -> u64 {
+fn estimate_timer_freq(millis_to_wait: u64) -> u64 {
     let os_freq = get_os_timer_freq();
-    let cpu_start = read_cpu_timer();
+    let timer_start = READ_TIMER();
     let os_start = read_os_timer();
 
     let mut os_end;
@@ -44,14 +47,14 @@ fn estimate_cpu_freq(millis_to_wait: u64) -> u64 {
         os_elapsed = os_end - os_start;
     }
 
-    let cpu_end = read_cpu_timer();
-    let cpu_elapsed = cpu_end - cpu_start;
-    os_freq * cpu_elapsed / os_elapsed
+    let timer_end = READ_TIMER();
+    let timer_elapsed = timer_end - timer_start;
+    os_freq * timer_elapsed / os_elapsed
 }
 
 unsafe fn start_ts() -> u64 {
     static CELL: RacyUnsafeCell<OnceCell<u64>> = RacyUnsafeCell::new(OnceCell::new());
-    *(*CELL.get()).get_or_init(|| read_cpu_timer())
+    *(*CELL.get()).get_or_init(|| READ_TIMER())
 }
 
 /// # Safety
@@ -70,7 +73,7 @@ impl ScopedTrace {
     fn new(trace_id: TraceId) -> Self {
         let trace_map = unsafe { trace_map() };
         let trace = trace_map.entry(trace_id).or_default();
-        let begin = read_cpu_timer();
+        let begin = READ_TIMER();
         let old_elapsed_inclusive = trace.elapsed_inclusive;
         let current = CURRENT_TRACE.get();
         let parent = unsafe { *current };
@@ -113,7 +116,7 @@ impl Drop for ScopedTrace {
     fn drop(&mut self) {
         let trace_map = unsafe { trace_map() };
         let trace = trace_map.get_mut(&self.trace_id).unwrap();
-        let time = read_cpu_timer() - self.begin;
+        let time = READ_TIMER() - self.begin;
         trace.elapsed_exclusive += time as i64;
         trace.hit_count += 1;
         trace.elapsed_inclusive = self.old_elapsed_inclusive + time;
@@ -138,7 +141,7 @@ impl Drop for ScopedTrace {
 #[cfg(feature = "perf")]
 pub fn begin_profile() {
     // initialize lazy statics
-    let _ = unsafe { cpu_freq() };
+    let _ = unsafe { timer_freq() };
     let _ = unsafe { trace_map() };
 
     // capture profile start time
@@ -158,14 +161,14 @@ pub fn begin_profile() {
 #[cfg(feature = "perf")]
 #[allow(clippy::cast_precision_loss)]
 pub fn end_and_print_profile() {
-    let end = read_cpu_timer();
+    let end = READ_TIMER();
     let start = unsafe { start_ts() };
     assert!(end > start, "ERROR: Profile end time is earlier than start time. `begin_profile` call should precede `end_and_print_profile` call.");
 
-    let cpu_time: u64 = end - start;
-    let cpu_freq = unsafe { cpu_freq() };
-    let total_time_ms: f64 = (1000f64 * cpu_time as f64) / cpu_freq as f64;
-    println!("Total time: {total_time_ms} ms (CPU freq {cpu_freq})");
+    let timer_time: u64 = end - start;
+    let timer_freq = unsafe { timer_freq() };
+    let total_time_ms: f64 = (1000f64 * timer_time as f64) / timer_freq as f64;
+    println!("Total time: {total_time_ms} ms (CPU freq {timer_freq})");
 
     let trace_map = unsafe { trace_map() };
     let mut trace_ids = trace_map.keys().collect::<Vec<_>>();
@@ -175,11 +178,11 @@ pub fn end_and_print_profile() {
         let hits = trace.hit_count;
         if trace.elapsed_exclusive as u64 == trace.elapsed_inclusive {
             let elapsed = trace.elapsed_inclusive;
-            let percent = (elapsed as f64 / cpu_time as f64) * 100.0;
+            let percent = (elapsed as f64 / timer_time as f64) * 100.0;
             println!("  {trace_id}[{hits}]: {elapsed} ({percent:.2}%)");
         } else {
-            let percent_wo_children = (trace.elapsed_exclusive as f64 / cpu_time as f64) * 100.0;
-            let percent_w_children = (trace.elapsed_inclusive as f64 / cpu_time as f64) * 100.0;
+            let percent_wo_children = (trace.elapsed_exclusive as f64 / timer_time as f64) * 100.0;
+            let percent_w_children = (trace.elapsed_inclusive as f64 / timer_time as f64) * 100.0;
             let elapsed_self = trace.elapsed_exclusive;
             println!("  {trace_id}[{hits}]: {elapsed_self} ({percent_wo_children:.2}%, {percent_w_children:.2}% w/ children)");
         }
@@ -193,12 +196,12 @@ pub fn begin_profile() {
 
 #[cfg(not(feature = "perf"))]
 pub fn end_and_print_profile() {
-    let end = read_cpu_timer();
+    let end = READ_TIMER();
     let start = unsafe { start_ts() };
     assert!(end > start, "ERROR: Profile end time is earlier than start time. `begin_profile` call should precede `end_and_print_profile` call.");
 
     let cpu_time: u64 = end - start;
-    let cpu_freq = unsafe { cpu_freq() };
+    let cpu_freq = unsafe { timer_freq() };
     let total_time_ms: f64 = (1000f64 * cpu_time as f64) / cpu_freq as f64;
     println!("Total time: {total_time_ms} ms (CPU freq {cpu_freq})");
 }
